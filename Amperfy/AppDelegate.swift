@@ -77,6 +77,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     AmperKit.shared.notificationHandler
   }()
 
+  lazy var externalLyricsSyncCoordinator = ExternalLyricsSyncCoordinator(
+    player: player,
+    lyricsLoader: { [weak self] song in
+      guard let self,
+            let account = song.account,
+            let lyricsRelFilePath = song.lyricsRelFilePath
+      else { return nil }
+      return try await self.getMeta(account.info).librarySyncer
+        .parseLyrics(relFilePath: lyricsRelFilePath)
+        .getFirstSyncedLyricsOrUnsyncedAsDefault()
+    }
+  )
+
   public var libraryUpdater: LibraryUpdater { AmperKit.shared.libraryUpdater }
 
   public lazy var userStatistics = {
@@ -271,6 +284,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     configureBackgroundFetch()
     configureNotificationHandling()
     initEventLogger()
+    externalLyricsSyncCoordinator.start()
 
     guard let activeAccountInfo = appDelegate.storage.settings.accounts.active else {
       return true

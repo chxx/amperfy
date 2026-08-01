@@ -27,6 +27,8 @@ import SwiftUI
 struct PlayerSettingsView: View {
   @EnvironmentObject
   private var settings: Settings
+  @ObservedObject
+  private var bluetoothLyricsTransport = BluetoothLyricsTransport.shared
 
   private func updateBitrate(
     wifi: StreamingMaxBitratePreference? = nil,
@@ -85,6 +87,21 @@ struct PlayerSettingsView: View {
             )
           },
           footer: "Automatically normalize track volume based on replay gain information for consistent loudness."
+        )
+
+        SettingsSection(
+          content: {
+            SettingsCheckBoxRow(
+              title: "Bluetooth Lyrics Display",
+              isOn: $settings.isBluetoothLyricsSyncEnabled
+            )
+            SettingsRow(title: "Display Status") {
+              Text(bluetoothLyricsTransport.status.description)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+            }
+          },
+          footer: "Automatically connects to a compatible BLE display and keeps synchronized lyrics active outside the lyrics screen."
         )
 
         // General Settings

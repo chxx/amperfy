@@ -68,6 +68,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Amperfy uses Bluetooth to synchronize the currently playing lyrics with an external display.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INPlayMediaIntent</string>
@@ -80,6 +82,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>bluetooth-central</string>
 		<string>fetch</string>
 	</array>
 	<key>UIBrowsableContentSupportsSectionedBrowsing</key>
