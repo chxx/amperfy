@@ -103,9 +103,10 @@ public class RemoteCommandCenterHandler {
     remoteCommandCenter.changeShuffleModeCommand.isEnabled = true
     remoteCommandCenter.changeShuffleModeCommand.addTarget(handler: { event in
       guard let command = event as? MPChangeShuffleModeCommandEvent else { return .noSuchContent }
-      if (command.shuffleType == .off && self.musicPlayer.isShuffle) ||
-        (command.shuffleType != .off && !self.musicPlayer.isShuffle) {}
-      self.musicPlayer.toggleShuffle()
+      let shouldShuffle = command.shuffleType != .off
+      if shouldShuffle != self.musicPlayer.isShuffle {
+        self.musicPlayer.toggleShuffle()
+      }
       return .success
     })
 

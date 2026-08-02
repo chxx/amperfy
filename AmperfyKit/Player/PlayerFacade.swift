@@ -151,6 +151,22 @@ public struct PlayContext {
 // MARK: - PlayerFacade
 
 @MainActor
+public protocol PlaybackCommandInterceptor: AnyObject {
+  var externalPlaybackElapsedTime: Double? { get }
+  var externalPlaybackDuration: Double? { get }
+  var externalPlaybackVolume: Float? { get }
+  func interceptPlay() -> Bool
+  func interceptPause() -> Bool
+  func interceptTogglePlayPause() -> Bool
+  func interceptPrevious() -> Bool
+  func interceptNext() -> Bool
+  func interceptPlay(context: PlayContext, shuffled: Bool) -> Bool
+  func interceptPlay(playerIndex: PlayerIndex) -> Bool
+  func interceptSeek(toSecond: Double) -> Bool
+  func interceptVolumeChange(to volume: Float) -> Bool
+}
+
+@MainActor
 public protocol PlayerFacade {
   var prevQueueCount: Int { get }
   func getPrevQueueItems(from: Int, to: Int?) -> [AbstractPlayable]
@@ -214,6 +230,10 @@ public protocol PlayerFacade {
   func play(context: PlayContext)
   func playShuffled(context: PlayContext)
   func play(playerIndex: PlayerIndex)
+  func prepare(context: PlayContext, shuffled: Bool)
+  func prepare(playerIndex: PlayerIndex)
+  func preparePrevious()
+  func prepareNext()
   func pause()
   func togglePlayPause()
   func stop()
@@ -227,6 +247,9 @@ public protocol PlayerFacade {
   var audioAnalyzer: AudioAnalyzer { get }
 
   func addNotifier(notifier: MusicPlayable)
+  func notifyElapsedTimeChanged()
+  func notifyLyricsTimeChanged(time: CMTime)
+  func setPlaybackCommandInterceptor(_ interceptor: PlaybackCommandInterceptor?)
 
   func updateEqualizerEnabled(isEnabled: Bool)
   func updateEqualizerSetting(eqSetting: EqualizerSetting)
@@ -299,6 +322,7 @@ extension PlayerFacade {
 
 @MainActor
 class PlayerFacadeImpl: PlayerFacade {
+  private weak var playbackCommandInterceptor: PlaybackCommandInterceptor?
   private var playerStatus: PlayerStatusPersistent
   private var queueHandler: PlayQueueHandler
   private let backendAudioPlayer: BackendAudioPlayer
@@ -366,9 +390,10 @@ class PlayerFacadeImpl: PlayerFacade {
 
   var volume: Float {
     get {
-      backendAudioPlayer.volume
+      playbackCommandInterceptor?.externalPlaybackVolume ?? backendAudioPlayer.volume
     }
     set {
+      if playbackCommandInterceptor?.interceptVolumeChange(to: newValue) == true { return }
       backendAudioPlayer.volume = newValue
     }
   }
@@ -420,11 +445,11 @@ class PlayerFacadeImpl: PlayerFacade {
   }
 
   var elapsedTime: Double {
-    backendAudioPlayer.elapsedTime
+    playbackCommandInterceptor?.externalPlaybackElapsedTime ?? backendAudioPlayer.elapsedTime
   }
 
   var duration: Double {
-    backendAudioPlayer.duration
+    playbackCommandInterceptor?.externalPlaybackDuration ?? backendAudioPlayer.duration
   }
 
   var isShuffle: Bool {
@@ -526,6 +551,7 @@ class PlayerFacadeImpl: PlayerFacade {
 
   func seek(toSecond: Double) {
     userStatistics.usedAction(.playerSeek)
+    if playbackCommandInterceptor?.interceptSeek(toSecond: toSecond) == true { return }
     guard let currentlyPlaying = currentlyPlaying else { return }
     switch currentlyPlaying.derivedType {
     case .podcastEpisode, .song:
@@ -601,10 +627,12 @@ class PlayerFacadeImpl: PlayerFacade {
   }
 
   func play() {
+    if playbackCommandInterceptor?.interceptPlay() == true { return }
     musicPlayer.play()
   }
 
   func play(context: PlayContext) {
+    if playbackCommandInterceptor?.interceptPlay(context: context, shuffled: false) == true { return }
     setPlayerModeForContextPlay(context.type)
     if playerMode == .music, playerStatus.isShuffle {
       playerStatus.setShuffle(false)
@@ -620,6 +648,7 @@ class PlayerFacadeImpl: PlayerFacade {
   }
 
   func playShuffled(context: PlayContext) {
+    if playbackCommandInterceptor?.interceptPlay(context: context, shuffled: true) == true { return }
     setPlayerModeForContextPlay(context.type)
     guard !context.playables.isEmpty else { return }
     if playerStatus.isShuffle { playerStatus.setShuffle(false) }
@@ -631,14 +660,49 @@ class PlayerFacadeImpl: PlayerFacade {
   }
 
   func play(playerIndex: PlayerIndex) {
+    if playbackCommandInterceptor?.interceptPlay(playerIndex: playerIndex) == true { return }
     musicPlayer.play(playerIndex: playerIndex)
   }
 
+  func prepare(context: PlayContext, shuffled: Bool) {
+    setPlayerModeForContextPlay(context.type)
+    let selectedContext = shuffled ? context.getWithShuffledIndex() : context
+    musicPlayer.prepare(context: selectedContext)
+    playerStatus.setShuffle(shuffled)
+    musicPlayer.notifyShuffleUpdated()
+    musicPlayer.notifyPlaylistUpdated()
+    musicPlayer.notifyNowPlayingInfoChanged()
+    musicPlayer.notifyArtworkChanged()
+  }
+
+  func prepare(playerIndex: PlayerIndex) {
+    musicPlayer.prepare(playerIndex: playerIndex)
+    musicPlayer.notifyPlaylistUpdated()
+    musicPlayer.notifyNowPlayingInfoChanged()
+    musicPlayer.notifyArtworkChanged()
+  }
+
+  func preparePrevious() {
+    musicPlayer.preparePrevious()
+    musicPlayer.notifyPlaylistUpdated()
+    musicPlayer.notifyNowPlayingInfoChanged()
+    musicPlayer.notifyArtworkChanged()
+  }
+
+  func prepareNext() {
+    musicPlayer.prepareNext()
+    musicPlayer.notifyPlaylistUpdated()
+    musicPlayer.notifyNowPlayingInfoChanged()
+    musicPlayer.notifyArtworkChanged()
+  }
+
   func pause() {
+    if playbackCommandInterceptor?.interceptPause() == true { return }
     musicPlayer.pause()
   }
 
   func togglePlayPause() {
+    if playbackCommandInterceptor?.interceptTogglePlayPause() == true { return }
     musicPlayer.togglePlayPause()
   }
 
@@ -647,14 +711,17 @@ class PlayerFacadeImpl: PlayerFacade {
   }
 
   func playPrevious() {
+    if playbackCommandInterceptor?.interceptPrevious() == true { return }
     musicPlayer.playPrevious()
   }
 
   func playPreviousOrReplay() {
+    if playbackCommandInterceptor?.interceptPrevious() == true { return }
     musicPlayer.playPreviousOrReplay()
   }
 
   func playNext() {
+    if playbackCommandInterceptor?.interceptNext() == true { return }
     musicPlayer.playNext()
   }
 
@@ -672,5 +739,20 @@ class PlayerFacadeImpl: PlayerFacade {
 
   func addNotifier(notifier: MusicPlayable) {
     musicPlayer.addNotifier(notifier: notifier)
+  }
+
+  func notifyElapsedTimeChanged() {
+    // External playback (currently Sonos) supplies its own lock-screen state.
+    // Notify the in-app surfaces without letting the paused local audio engine
+    // overwrite MPNowPlayingInfoCenter with its stale elapsed time.
+    musicPlayer.notifyElapsedTimeChanged(includeNowPlayingInfoCenter: false)
+  }
+
+  func notifyLyricsTimeChanged(time: CMTime) {
+    musicPlayer.notifyLyricsTimeChanged(time: time)
+  }
+
+  func setPlaybackCommandInterceptor(_ interceptor: PlaybackCommandInterceptor?) {
+    playbackCommandInterceptor = interceptor
   }
 }

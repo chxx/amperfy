@@ -90,7 +90,6 @@ class PlayerControlView: UIView {
     self.layoutMargins = Self.margin
     self.player = appDelegate.player
     player.addNotifier(notifier: self)
-
     #if targetEnvironment(macCatalyst) // ok
       addSubview(airplayVolume!)
     #endif
@@ -100,6 +99,7 @@ class PlayerControlView: UIView {
     rootView = toWorkOnRootView
 
     playerHandler = PlayerUIHandler(player: player, style: .popupPlayer)
+    appDelegate.bonobS2Integration.registerPlayerControlPlayButton(playButton)
 
     playButton.imageView?.tintColor = .label
     previousButton.tintColor = .label
@@ -255,6 +255,7 @@ class PlayerControlView: UIView {
       skipForwardButton: skipForwardButton
     )
     playerHandler?.refreshPlayButton(playButton)
+    appDelegate.bonobS2Integration.refreshPlayButton(playButton)
     playerHandler?.refreshTimeInfo(
       timeSlider: timeSlider,
       elapsedTimeLabel: elapsedTimeLabel,

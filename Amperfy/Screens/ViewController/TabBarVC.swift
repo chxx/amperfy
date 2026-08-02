@@ -152,6 +152,8 @@ class TabBarVC: UITabBarController {
     if appDelegate.storage.settings.user.isOfflineMode {
       appDelegate.eventLogger.info(topic: "Reminder", message: "Offline Mode is active.")
     }
+
+    appDelegate.bonobS2Integration.restorePlayingSonosIfNeeded(account: account)
   }
 
   private func mainContent() -> UIView {

@@ -179,6 +179,47 @@ public class AudioPlayer: NSObject, BackendAudioPlayerNotifiable {
     }
   }
 
+  func prepare(context: PlayContext) {
+    guard context.getActivePlayable() != nil else { return }
+    let topUserQueueItem = queueHandler.getUserQueueItem(at: 0)
+    let wasUserQueuePlaying = queueHandler.isUserQueuePlaying
+    queueHandler.clearActiveQueue()
+    queueHandler.appendActiveQueue(playables: context.playables)
+    if context.type == .music {
+      queueHandler.setContextName(context.name)
+    }
+
+    if queueHandler.isUserQueuePlaying {
+      _ = queueHandler.markAndGetPlayableAsPlaying(
+        at: PlayerIndex(queueType: .next, index: context.index)
+      )
+      if !wasUserQueuePlaying, let topUserQueueItem {
+        queueHandler.insertUserQueue(playables: [topUserQueueItem])
+      }
+    } else if context.index > 0 {
+      _ = queueHandler.markAndGetPlayableAsPlaying(
+        at: PlayerIndex(queueType: .next, index: context.index - 1)
+      )
+    }
+  }
+
+  func prepare(playerIndex: PlayerIndex) {
+    _ = queueHandler.markAndGetPlayableAsPlaying(at: playerIndex)
+  }
+
+  func preparePrevious() {
+    if queueHandler.prevQueueCount > 0 {
+      prepare(playerIndex: PlayerIndex(queueType: .prev, index: queueHandler.prevQueueCount - 1))
+    } else if playerStatus.repeatMode == .all, queueHandler.nextQueueCount > 0 {
+      prepare(playerIndex: PlayerIndex(queueType: .next, index: queueHandler.nextQueueCount - 1))
+    }
+  }
+
+  func prepareNext() {
+    guard let nextPlayerIndex else { return }
+    prepare(playerIndex: nextPlayerIndex)
+  }
+
   func play(playerIndex: PlayerIndex) {
     guard let playable = queueHandler.markAndGetPlayableAsPlaying(at: playerIndex) else {
       stop()
@@ -372,10 +413,12 @@ public class AudioPlayer: NSObject, BackendAudioPlayerNotifiable {
     }
   }
 
-  func notifyElapsedTimeChanged() {
+  func notifyElapsedTimeChanged(includeNowPlayingInfoCenter: Bool = true) {
     notifierList = notifierList.filter { $0.value != nil }
     for notifier in notifierList {
-      notifier.value?.didElapsedTimeChange()
+      guard let value = notifier.value else { continue }
+      if !includeNowPlayingInfoCenter, value is NowPlayingInfoCenterHandler { continue }
+      value.didElapsedTimeChange()
     }
   }
 

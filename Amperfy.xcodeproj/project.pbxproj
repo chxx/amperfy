@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B0B0B0010000000000000001 /* SonosLocalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B0B0020000000000000001 /* SonosLocalController.swift */; };
+		B0B0B0030000000000000001 /* BonobS2Integration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B0B0040000000000000001 /* BonobS2Integration.swift */; };
 		09EB5F102F93B96E00B1C71C /* ShareSongAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09EB5F0D2F93B65400B1C71C /* ShareSongAction.swift */; };
 		43FBE27F250D4DFD00D5F9B3 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 43FBE27E250D4DFD00D5F9B3 /* LaunchScreen.storyboard */; };
 		5003D8FB267B3390006946BF /* LibrarySyncPopupVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5003D8FA267B3390006946BF /* LibrarySyncPopupVC.swift */; };
@@ -598,6 +600,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B0B0B0020000000000000001 /* SonosLocalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SonosLocalController.swift; sourceTree = "<group>"; };
+		B0B0B0040000000000000001 /* BonobS2Integration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonobS2Integration.swift; sourceTree = "<group>"; };
 		09EB5F0D2F93B65400B1C71C /* ShareSongAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSongAction.swift; sourceTree = "<group>"; };
 		43FBE27E250D4DFD00D5F9B3 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		5002565625E69DC700674CE1 /* SpinnerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpinnerViewController.swift; sourceTree = "<group>"; };
@@ -1209,6 +1213,15 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		B0B0B0050000000000000001 /* Sonos */ = {
+			isa = PBXGroup;
+			children = (
+				B0B0B0020000000000000001 /* SonosLocalController.swift */,
+				B0B0B0040000000000000001 /* BonobS2Integration.swift */,
+			);
+			path = Sonos;
+			sourceTree = "<group>";
+		};
 		50073BDB222EFEDC000130D8 /* Download */ = {
 			isa = PBXGroup;
 			children = (
@@ -1472,6 +1485,7 @@
 		508385E621C5965B00C4BB32 /* Amperfy */ = {
 			isa = PBXGroup;
 			children = (
+				B0B0B0050000000000000001 /* Sonos */,
 				B1E000030000000000000001 /* ExternalLyrics */,
 				508385E721C5965B00C4BB32 /* AppDelegate.swift */,
 				5059A31B28A9ED680068E4D2 /* SceneDelegate.swift */,
@@ -2461,6 +2475,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B0B0B0010000000000000001 /* SonosLocalController.swift in Sources */,
+				B0B0B0030000000000000001 /* BonobS2Integration.swift in Sources */,
 				B1E000010000000000000001 /* BluetoothLyricsTransport.swift in Sources */,
 				B1E000010000000000000002 /* ExternalLyricsSyncCoordinator.swift in Sources */,
 				638920F02C8C8E9000932EE8 /* SettingsList.swift in Sources */,

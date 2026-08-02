@@ -59,6 +59,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     return AmperKit.shared.player
   }()
 
+  lazy var bonobS2Integration = BonobS2Integration(player: player)
+
   public lazy var log = {
     AmperKit.shared.log
   }()
@@ -285,6 +287,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     configureNotificationHandling()
     initEventLogger()
     externalLyricsSyncCoordinator.start()
+    configureSonosNetworkRecovery()
 
     guard let activeAccountInfo = appDelegate.storage.settings.accounts.active else {
       return true
@@ -313,6 +316,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     userStatistics.sessionStarted()
 
     return true
+  }
+
+  private func configureSonosNetworkRecovery() {
+    var monitor = networkMonitor
+    monitor.connectionTypeChangedCB = { [weak self] _ in
+      await MainActor.run {
+        guard let self, self.networkMonitor.isWifiOrEthernet else { return }
+        self.bonobS2Integration.localNetworkDidBecomeAvailable()
+      }
+    }
   }
 
   private var isAlreadyRegisteredToPlayer = false
@@ -405,6 +418,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
     // Use this method to pause ongoing tasks, disable timers, and invalidate graphics rendering callbacks. Games should use this method to pause the game.
     os_log("applicationWillResignActive", log: self.log, type: .info)
+    bonobS2Integration.synchronizeSonosNowPlayingIfNeeded()
   }
 
   func applicationDidEnterBackground(_ application: UIApplication) {
@@ -421,11 +435,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
   func applicationDidBecomeActive(_ application: UIApplication) {
     // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
     os_log("applicationDidBecomeActive", log: self.log, type: .info)
+    bonobS2Integration.retryStartupRestoreIfPossible()
+    bonobS2Integration.synchronizeSonosNowPlayingIfNeeded()
   }
 
   func applicationWillTerminate(_ application: UIApplication) {
     // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
     os_log("applicationWillTerminate", log: self.log, type: .info)
+    bonobS2Integration.pauseForApplicationTermination()
     for meta in AmperKit.shared.allActiveMetas {
       meta.value.backgroundLibrarySyncer.stop()
     }

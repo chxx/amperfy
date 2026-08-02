@@ -527,7 +527,7 @@ class PlayableTableCell: BasicTableCell {
     @IBAction
     func playButtonPressed(_ sender: Any) {
       if appDelegate.player.currentlyPlaying == playable,
-         appDelegate.player.isPlaying {
+         appDelegate.bonobS2Integration.isPlaybackPlaying {
         appDelegate.player.pause()
       } else if appDelegate.player.currentlyPlaying == playable {
         appDelegate.player.play()
@@ -545,7 +545,7 @@ class PlayableTableCell: BasicTableCell {
         } else {
           var buttonImg = UIImage()
           if appDelegate.player.currentlyPlaying == playable,
-             appDelegate.player.isPlaying {
+             appDelegate.bonobS2Integration.isPlaybackPlaying {
             if appDelegate.player.isStopInsteadOfPause {
               buttonImg = UIImage.stop
             } else {

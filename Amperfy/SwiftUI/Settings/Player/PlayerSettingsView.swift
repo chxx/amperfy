@@ -29,6 +29,14 @@ struct PlayerSettingsView: View {
   private var settings: Settings
   @ObservedObject
   private var bluetoothLyricsTransport = BluetoothLyricsTransport.shared
+  @State
+  private var sonosHost = ""
+  @State
+  private var sonosTemplateLearned = false
+  @State
+  private var sonosDefaultRoom: String?
+  @State
+  private var showForgetBonobConfirmation = false
 
   private func updateBitrate(
     wifi: StreamingMaxBitratePreference? = nil,
@@ -102,6 +110,37 @@ struct PlayerSettingsView: View {
             }
           },
           footer: "Automatically connects to a compatible BLE display and keeps synchronized lyrics active outside the lyrics screen."
+        )
+
+        SettingsSection(
+          content: {
+            SettingsRow(title: "Sonos IP Address") {
+              TextField("192.168.1.25", text: $sonosHost)
+                .keyboardType(.numbersAndPunctuation)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .multilineTextAlignment(.trailing)
+                .onSubmit { appDelegate.bonobS2Integration.updateManualHost(sonosHost) }
+            }
+            SettingsRow(title: "bonob Template") {
+              SecondaryText(sonosTemplateLearned ? "Learned" : "Not learned")
+            }
+            SettingsRow(title: "Default Sonos Room") {
+              SecondaryText(sonosDefaultRoom ?? "Not selected")
+            }
+            Button("Save Sonos IP") {
+              appDelegate.bonobS2Integration.updateManualHost(sonosHost)
+              sonosHost = appDelegate.bonobS2Integration.configuredManualHost
+            }
+            Button("Clear Default Sonos Room") {
+              appDelegate.bonobS2Integration.clearDefaultRoom()
+              sonosDefaultRoom = nil
+            }
+            Button("Learn bonob Again", role: .destructive) {
+              showForgetBonobConfirmation = true
+            }
+          },
+          footer: "For Sonos S2 with bonob. Enter any Sonos speaker's local IP when automatic discovery is unavailable. After resetting the template, play one bonob song in the Sonos app and tap the speaker button in Amperfy."
         )
 
         // General Settings
@@ -228,6 +267,22 @@ struct PlayerSettingsView: View {
     .navigationBarTitleDisplayMode(.inline)
     .onAppear {
       appDelegate.userStatistics.visited(.settingsPlayer)
+      sonosHost = appDelegate.bonobS2Integration.configuredManualHost
+      sonosTemplateLearned = appDelegate.bonobS2Integration.hasLearnedTemplate
+      sonosDefaultRoom = appDelegate.bonobS2Integration.configuredDefaultRoomName
+    }
+    .confirmationDialog(
+      "Learn bonob again?",
+      isPresented: $showForgetBonobConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Forget Learned Template", role: .destructive) {
+        appDelegate.bonobS2Integration.forgetLearnedTemplate()
+        sonosTemplateLearned = false
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("The next Sonos button press will learn the queue format from the bonob song currently playing in the Sonos app.")
     }
   }
 }

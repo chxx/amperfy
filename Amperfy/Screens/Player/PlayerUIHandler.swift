@@ -117,6 +117,10 @@ class PlayerUIHandler: NSObject {
 
     button.setImage(buttonImg, for: UIControl.State.normal)
     button.configuration?.image = buttonImg
+    // The local audio engine remains paused while Sonos is the playback
+    // target, so its `isPlaying` value cannot drive the visible transport
+    // state. Let the active target override every button refresh path.
+    appDelegate.bonobS2Integration.refreshPlayButton(button)
   }
 
   func refreshSkipButtons(skipBackwardButton: UIButton, skipForwardButton: UIButton) {

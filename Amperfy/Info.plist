@@ -70,6 +70,12 @@
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Amperfy uses Bluetooth to synchronize the currently playing lyrics with an external display.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_sonos._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Amperfy uses your local network to find and control Sonos speakers for bonob playback.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INPlayMediaIntent</string>

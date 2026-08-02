@@ -208,8 +208,52 @@ class MiniPlayerView: UIView {
     let button = UIButton(configuration: config)
     button.tintColor = .label
     button.addTarget(self, action: #selector(Self.playButtonPushed), for: .touchUpInside)
+    button.configurationUpdateHandler = { [weak self] button in
+      self?.applyUnifiedPlayButtonConfiguration(button)
+    }
     return button
   }()
+
+  private func applyUnifiedPlayButtonConfiguration(_ button: UIButton) {
+    let isPlaying = appDelegate.bonobS2Integration.isPlaybackPlaying
+    let image: UIImage
+    if isPlaying {
+      image = player.isStopInsteadOfPause ? .stop : .pause
+    } else {
+      image = .play
+    }
+    button.configuration?.image = image.withConfiguration(
+      UIImage.SymbolConfiguration(pointSize: PlayerUIHandler.playAndNextiOSButtonImagePointSize)
+    )
+  }
+
+  fileprivate lazy var sonosModeButton: UIButton = {
+    var config = UIButton.Configuration.plain()
+    config.image = UIImage(systemName: "hifispeaker.2")?.withConfiguration(
+      UIImage.SymbolConfiguration(scale: .medium)
+    )
+    let button = UIButton(configuration: config)
+    button.addTarget(self, action: #selector(Self.sonosModeButtonPushed), for: .touchUpInside)
+    return button
+  }()
+
+  @objc
+  private func sonosModeButtonPushed() {
+    appDelegate.bonobS2Integration.togglePlaybackTarget { [weak self] in
+      self?.refreshSonosModeButton()
+    }
+  }
+
+  private func refreshSonosModeButton() {
+    let isSonosMode = appDelegate.bonobS2Integration.isSonosMode
+    sonosModeButton.configuration?.image = UIImage(
+      systemName: isSonosMode ? "hifispeaker.2.fill" : "hifispeaker.2"
+    )?.withConfiguration(UIImage.SymbolConfiguration(scale: .medium))
+    sonosModeButton.configuration?.baseForegroundColor = isSonosMode ? .systemBlue : .label
+    sonosModeButton.accessibilityLabel = isSonosMode
+      ? "Sonos playback mode. Double tap to switch to this device."
+      : "This device playback mode. Double tap to switch to Sonos."
+  }
 
   @IBAction
   func playButtonPushed(_ sender: Any) {
@@ -357,13 +401,19 @@ class MiniPlayerView: UIView {
 
   fileprivate lazy var volumeButton: UIButton = {
     var config = UIButton.Configuration.plain()
+    #if targetEnvironment(macCatalyst)
+      let imagePointSize = PlayerUIHandler.bigButtonImagePointSize
+    #else
+      let imagePointSize = PlayerUIHandler.playAndNextiOSButtonImagePointSize
+    #endif
     config.image = .volumeMax
       .withConfiguration(
         UIImage
-          .SymbolConfiguration(pointSize: PlayerUIHandler.bigButtonImagePointSize)
+          .SymbolConfiguration(pointSize: imagePointSize)
       )
     let button = UIButton(configuration: config)
     button.tintColor = .label
+    button.accessibilityLabel = "Volume"
     button.addTarget(self, action: #selector(Self.volumeButtonPushed), for: .touchUpInside)
     return button
   }()
@@ -562,7 +612,6 @@ class MiniPlayerView: UIView {
     #endif
 
     player.addNotifier(notifier: self)
-
     registerForTraitChanges(
       [UITraitUserInterfaceStyle.self, UITraitHorizontalSizeClass.self],
       handler: { (self: Self, previousTraitCollection: UITraitCollection) in
@@ -576,6 +625,12 @@ class MiniPlayerView: UIView {
     ) in
       self.refreshForTabAccessoryTraitChange()
       self.tabAccessoryTraitChangeCB?()
+      Task { @MainActor [weak self] in
+        await Task.yield()
+        guard let self else { return }
+        self.playButton.setNeedsUpdateConfiguration()
+        self.refreshSonosModeButton()
+      }
     }
   }
 
@@ -598,6 +653,7 @@ class MiniPlayerView: UIView {
       )
     }
     playButtonTrailingConstraint?.isActive = true
+    playerHandler?.refreshPlayButton(playButton)
   }
 
   public func configureForMac() {
@@ -644,6 +700,8 @@ class MiniPlayerView: UIView {
 
   public func configureForiOS() {
     playerHandler = PlayerUIHandler(player: player, style: .miniPlayeriOS)
+    appDelegate.bonobS2Integration.registerMiniPlayerPlayButton(playButton)
+    appDelegate.bonobS2Integration.registerMiniPlayerTargetButton(sonosModeButton)
     let miniPlayerGotTouchedView = UIView()
     let tapGesture = UITapGestureRecognizer(target: self, action: #selector(miniPlayerGotTouched))
     addGestureRecognizer(tapGesture)
@@ -655,6 +713,8 @@ class MiniPlayerView: UIView {
     timeSlider.translatesAutoresizingMaskIntoConstraints = false
     liveLabel.translatesAutoresizingMaskIntoConstraints = false
     playButton.translatesAutoresizingMaskIntoConstraints = false
+    volumeButton.translatesAutoresizingMaskIntoConstraints = false
+    sonosModeButton.translatesAutoresizingMaskIntoConstraints = false
     nextButton.translatesAutoresizingMaskIntoConstraints = false
 
     addSubview(miniPlayerGotTouchedView)
@@ -663,6 +723,8 @@ class MiniPlayerView: UIView {
     addSubview(subtitleLabel)
     addSubview(timeSlider)
     addSubview(liveLabel)
+    addSubview(volumeButton)
+    addSubview(sonosModeButton)
     addSubview(playButton)
     addSubview(nextButton)
 
@@ -671,7 +733,7 @@ class MiniPlayerView: UIView {
       miniPlayerGotTouchedView.heightAnchor.constraint(equalTo: heightAnchor),
       miniPlayerGotTouchedView.bottomAnchor.constraint(equalTo: bottomAnchor),
       miniPlayerGotTouchedView.trailingAnchor.constraint(
-        equalTo: playButton.leadingAnchor,
+        equalTo: volumeButton.leadingAnchor,
         constant: -8
       ),
 
@@ -693,12 +755,22 @@ class MiniPlayerView: UIView {
       titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 8),
       titleLabel.bottomAnchor.constraint(equalTo: playButton.centerYAnchor),
       titleLabel.leadingAnchor.constraint(equalTo: artworkImage.trailingAnchor, constant: 8),
-      titleLabel.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -8),
+      titleLabel.trailingAnchor.constraint(equalTo: volumeButton.leadingAnchor, constant: -8),
 
       subtitleLabel.topAnchor.constraint(equalTo: playButton.centerYAnchor, constant: 0),
       subtitleLabel.bottomAnchor.constraint(equalTo: timeSlider.topAnchor, constant: -8),
       subtitleLabel.leadingAnchor.constraint(equalTo: artworkImage.trailingAnchor, constant: 8),
-      subtitleLabel.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -8),
+      subtitleLabel.trailingAnchor.constraint(equalTo: volumeButton.leadingAnchor, constant: -8),
+
+      volumeButton.centerYAnchor.constraint(equalTo: artworkImage.centerYAnchor),
+      volumeButton.widthAnchor.constraint(equalToConstant: 30),
+      volumeButton.heightAnchor.constraint(equalTo: volumeButton.widthAnchor),
+      volumeButton.trailingAnchor.constraint(equalTo: sonosModeButton.leadingAnchor, constant: -5),
+
+      sonosModeButton.centerYAnchor.constraint(equalTo: artworkImage.centerYAnchor),
+      sonosModeButton.widthAnchor.constraint(equalToConstant: 30),
+      sonosModeButton.heightAnchor.constraint(equalTo: sonosModeButton.widthAnchor),
+      sonosModeButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -5),
 
       playButton.centerYAnchor.constraint(equalTo: artworkImage.centerYAnchor, constant: 0),
       playButton.widthAnchor.constraint(equalToConstant: 30),
@@ -861,6 +933,8 @@ class MiniPlayerView: UIView {
     )
     playerHandler?.refreshArtwork(artworkImage: artworkImage)
     playerHandler?.refreshPlayButton(playButton)
+    appDelegate.bonobS2Integration.refreshPlayButton(playButton)
+    refreshSonosModeButton()
     playerHandler?.refreshPrevNextButtons(previousButton: previousButton, nextButton: nextButton)
     playerHandler?.refreshDisplayPlaylistButton(displayPlaylistButton: playlistButton)
     playerHandler?.refreshRepeatButton(repeatButton: repeatButton)
@@ -918,7 +992,7 @@ class MiniPlayerView: UIView {
     popoverContentController.preferredContentSize = sliderMenuView.frame.size
 
     if let popoverPresentationController = popoverContentController.popoverPresentationController {
-      popoverPresentationController.permittedArrowDirections = .up
+      popoverPresentationController.permittedArrowDirections = .any
       popoverPresentationController.delegate = popoverContentController
       popoverPresentationController.sourceView = volumeButton
       (AppDelegate.mainWindowHostVC as? UIViewController)?.present(

@@ -189,7 +189,7 @@ class PlayIndicator {
       indicator.color = isDisplayedOnImage ? .white : appDelegate.storage.settings.accounts
         .getSetting(accountInfo).read.themePreference
         .asColor
-      if appDelegate.player.isPlaying {
+      if appDelegate.bonobS2Integration.isPlaybackPlaying {
         if indicator.state != .playing {
           indicator.state = .playing
         }
