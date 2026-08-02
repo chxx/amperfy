@@ -117,11 +117,13 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
     static let defaultGroupID = "bonobS2.defaultGroupID"
     static let defaultGroupName = "bonobS2.defaultGroupName"
     static let manualHost = "bonobS2.manualHost"
+    static let homePlayerID = "bonobS2.homePlayerID"
   }
 
   private let player: PlayerFacade
   private let controller = SonosLocalController()
   private(set) var isSonosPlaying = false
+  private(set) var isSonosAvailable: Bool
   private var isSonosPaused = false
   private var activeGroup: SonosGroup?
   private weak var controlButton: UIButton?
@@ -129,6 +131,7 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   private weak var miniPlayerPlayButton: UIButton?
   private weak var playerControlPlayButton: UIButton?
   private weak var miniPlayerTargetButton: UIButton?
+  private weak var playerControlTargetButton: UIButton?
   private var bypassingInterception = false
   private var didAttemptStartupRestore = false
   private var isStartupRestoreInProgress = false
@@ -144,6 +147,8 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   private var consecutiveSonosSyncFailures = 0
   private var sonosStateSyncTask: Task<Void, Never>?
   private var sonosProgressUpdateTask: Task<Void, Never>?
+  private var homeNetworkValidationTask: Task<Void, Never>?
+  private var networkLossTask: Task<Void, Never>?
   private var isSonosAudioSessionActive = false
   private var isPlayPauseCommandInFlight = false
   private var isTrackChangeInFlight = false
@@ -155,6 +160,9 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
 
   init(player: PlayerFacade) {
     self.player = player
+    // Before the first room is learned, keep the button available for setup.
+    // Afterwards it stays disabled until the saved household is discovered.
+    self.isSonosAvailable = UserDefaults.standard.string(forKey: DefaultsKey.homePlayerID) == nil
     player.setPlaybackCommandInterceptor(self)
     player.addNotifier(notifier: self)
   }
@@ -366,9 +374,10 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
     guard !didAttemptStartupRestore, !suppressStartupRestore else { return }
     guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
     didAttemptStartupRestore = true
-    guard loadTemplate() != nil,
-          let defaultGroupID = UserDefaults.standard.string(forKey: DefaultsKey.defaultGroupID)
-    else { return }
+    let defaultGroupID = UserDefaults.standard.string(forKey: DefaultsKey.defaultGroupID)
+    let defaultGroupName = UserDefaults.standard.string(forKey: DefaultsKey.defaultGroupName)
+    let homePlayerID = UserDefaults.standard.string(forKey: DefaultsKey.homePlayerID)
+    guard defaultGroupID != nil || defaultGroupName != nil || homePlayerID != nil else { return }
 
     startupRestoreAttemptID += 1
     let attemptID = startupRestoreAttemptID
@@ -380,42 +389,27 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
         }
       }
       do {
-        let groups = try await controller.refresh(
+        let discoveredGroups = try await controller.refresh(
           manualHost: UserDefaults.standard.string(forKey: DefaultsKey.manualHost)
         )
-        let defaultGroupName = UserDefaults.standard.string(forKey: DefaultsKey.defaultGroupName)
+        let groups = groupsOnConfiguredHomeNetwork(discoveredGroups)
         guard let group = groups.first(where: { $0.id == defaultGroupID })
           ?? groups.first(where: { $0.name == defaultGroupName })
+          ?? groupContainingHomePlayer(in: groups)
         else {
+          setSonosAvailability(false)
+          shouldRestoreWhenLocalNetworkReturns = true
           appDelegate.eventLogger.info(
             topic: "Sonos Restore",
-            message: "Saved Sonos room was not found."
+            message: "The configured home Sonos system was not found on this Wi-Fi network."
           )
           return
         }
+        rememberHomeNetwork(from: group)
+        setSonosAvailability(true)
+        shouldRestoreWhenLocalNetworkReturns = false
         let transport = try await controller.transportInfo(in: group)
-        guard transport.isPlaying else {
-          appDelegate.eventLogger.info(
-            topic: "Sonos Restore",
-            message: "Saved Sonos room is not playing (\(transport.state))."
-          )
-          return
-        }
-        let position = try await controller.positionInfo(in: group)
-        guard let trackID = BonobS2Template.trackID(in: position.trackURI) else {
-          appDelegate.eventLogger.info(
-            topic: "Sonos Restore",
-            message: "The playing Sonos item is not a bonob track."
-          )
-          return
-        }
-        guard let song = appDelegate.storage.main.library.getSong(for: account, id: trackID) else {
-          appDelegate.eventLogger.info(
-            topic: "Sonos Restore",
-            message: "The playing bonob track was not found in the active account."
-          )
-          return
-        }
+        let position = try? await controller.positionInfo(in: group)
 
         guard startupRestoreAttemptID == attemptID, !suppressStartupRestore else {
           appDelegate.eventLogger.info(
@@ -425,25 +419,34 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
           return
         }
 
-        bypassingInterception = true
-        player.prepare(
-          context: PlayContext(name: "Sonos · \(group.name)", playables: [song]),
-          shuffled: false
-        )
-        bypassingInterception = false
+        // Starting Amperfy at home selects Sonos as the playback target, but
+        // must never make the room start playing by itself. If Sonos was
+        // already playing, pause it before publishing the restored mode.
+        if transport.isPlaying {
+          try await controller.pause(in: group)
+        }
+        guard startupRestoreAttemptID == attemptID, !suppressStartupRestore else { return }
+
         activeGroup = group
         isSonosPlaying = true
-        isSonosPaused = false
+        isSonosPaused = true
+        acceptTransportConfirmationAfter = Date().addingTimeInterval(2)
         shouldRestoreWhenLocalNetworkReturns = false
-        updateSonosPosition(position)
+        ensureLocalPlayerIsPaused()
+        if let position {
+          synchronizeCurrentSong(with: position)
+          updateSonosPosition(position)
+        }
         updateSystemPlaybackState()
         beginSonosStateSynchronization()
         synchronizeSonosPlayMode()
         appDelegate.eventLogger.info(
           topic: "Sonos Restore",
-          message: "Restored Sonos playback in \(group.name)."
+          message: "Selected Sonos mode in \(group.name) with playback paused."
         )
       } catch {
+        setSonosAvailability(false)
+        shouldRestoreWhenLocalNetworkReturns = true
         // Startup restoration is best-effort. Discovery or a non-bonob source
         // must not interrupt normal app launch.
         appDelegate.eventLogger.info(
@@ -466,13 +469,89 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   }
 
   func localNetworkDidBecomeAvailable() {
+    networkLossTask?.cancel()
+    networkLossTask = nil
+    if isSonosPlaying {
+      validateActiveSonosHomeNetwork()
+      return
+    }
     guard shouldRestoreWhenLocalNetworkReturns, !isSonosPlaying,
           let startupRestoreAccount
     else { return }
-    shouldRestoreWhenLocalNetworkReturns = false
     suppressStartupRestore = false
     didAttemptStartupRestore = false
     restorePlayingSonosIfNeeded(account: startupRestoreAccount)
+  }
+
+  func localNetworkDidBecomeUnavailable() {
+    guard isSonosPlaying else { return }
+    homeNetworkValidationTask?.cancel()
+    homeNetworkValidationTask = nil
+    networkLossTask?.cancel()
+    networkLossTask = Task { [weak self] in
+      do {
+        // NWPath can briefly report an intermediate cellular/unsatisfied path
+        // while Wi-Fi is renegotiating. Give it a short stabilization window
+        // so the playback target does not visibly toggle off and back on.
+        try await Task.sleep(for: .milliseconds(750))
+      } catch {
+        return
+      }
+      guard let self, isSonosPlaying,
+            let appDelegate = UIApplication.shared.delegate as? AppDelegate,
+            !appDelegate.networkMonitor.isWifiOrEthernet
+      else { return }
+      setSonosAvailability(false)
+      leaveUnavailableSonosMode(reason: "The device left the home network.")
+    }
+  }
+
+  private func validateActiveSonosHomeNetwork() {
+    homeNetworkValidationTask?.cancel()
+    let controlledGroupID = activeGroup?.id
+    homeNetworkValidationTask = Task { [weak self] in
+      guard let self else { return }
+      if UserDefaults.standard.string(forKey: DefaultsKey.homePlayerID) != nil,
+         let validationPlayerID = activeGroup?.coordinatorID {
+        let isHomePlayerReachable = await controller.isKnownPlayerReachable(
+          id: validationPlayerID,
+          timeout: 1.5
+        )
+        guard !Task.isCancelled, isSonosPlaying, activeGroup?.id == controlledGroupID else {
+          return
+        }
+        if isHomePlayerReachable {
+          setSonosAvailability(true)
+          return
+        }
+        // A renderer can miss one direct request while waking or regrouping.
+        // Confirm the failure by rediscovering the household before changing
+        // playback target; a single timeout must never make the UI oscillate.
+      }
+
+      do {
+        let discoveredGroups = try await controller.refresh(
+          manualHost: UserDefaults.standard.string(forKey: DefaultsKey.manualHost)
+        )
+        guard !Task.isCancelled, isSonosPlaying, activeGroup?.id == controlledGroupID else {
+          return
+        }
+        guard !groupsOnConfiguredHomeNetwork(discoveredGroups).isEmpty else {
+          setSonosAvailability(false)
+          leaveUnavailableSonosMode(
+            reason: "The configured home Sonos system is not available on this Wi-Fi network."
+          )
+          return
+        }
+        setSonosAvailability(true)
+      } catch {
+        guard !Task.isCancelled, isSonosPlaying, activeGroup?.id == controlledGroupID else {
+          return
+        }
+        setSonosAvailability(false)
+        leaveUnavailableSonosMode(reason: error.localizedDescription)
+      }
+    }
   }
 
   func registerMiniPlayerPlayButton(_ button: UIButton) {
@@ -490,6 +569,11 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
     refreshSonosButton(button)
   }
 
+  func registerPlayerControlTargetButton(_ button: UIButton) {
+    playerControlTargetButton = button
+    refreshPlayerControlSonosButton(button)
+  }
+
   func togglePlaybackTarget(button: UIBarButtonItem) {
     togglePlaybackTarget { [weak self, weak button] in
       guard let self, let button else { return }
@@ -502,14 +586,21 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
       leaveSonos(resumeLocally: false, completion: completion)
       return
     }
+    guard isSonosAvailable else {
+      completion()
+      return
+    }
     Task {
       do {
-        let groups = try await controller.refresh(
+        let discoveredGroups = try await controller.refresh(
           manualHost: UserDefaults.standard.string(forKey: DefaultsKey.manualHost)
         )
+        let groups = groupsOnConfiguredHomeNetwork(discoveredGroups)
         guard !groups.isEmpty else { throw BonobS2Error.noRooms }
         let defaultID = UserDefaults.standard.string(forKey: DefaultsKey.defaultGroupID)
-        let group = groups.first(where: { $0.id == defaultID }) ?? groups[0]
+        let group = groups.first(where: { $0.id == defaultID })
+          ?? groupContainingHomePlayer(in: groups)
+          ?? groups[0]
         try await use(group: group)
         completion()
       } catch {
@@ -520,10 +611,11 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   }
 
   func refreshTargetButton(_ button: UIBarButtonItem) {
-    button.tintColor = isSonosPlaying ? .systemBlue : .label
+    button.isEnabled = isSonosPlaying || isSonosAvailable
+    button.tintColor = isSonosPlaying ? .systemBlue : (isSonosAvailable ? .label : .tertiaryLabel)
     button.accessibilityLabel = isSonosPlaying
       ? "Switch playback to this device"
-      : "Switch playback to Sonos"
+      : (isSonosAvailable ? "Switch playback to Sonos" : "Sonos is unavailable on this network")
   }
 
   var configuredManualHost: String {
@@ -548,6 +640,8 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   func clearDefaultRoom() {
     UserDefaults.standard.removeObject(forKey: DefaultsKey.defaultGroupID)
     UserDefaults.standard.removeObject(forKey: DefaultsKey.defaultGroupName)
+    UserDefaults.standard.removeObject(forKey: DefaultsKey.homePlayerID)
+    setSonosAvailability(true)
   }
 
   func presentControlPanel(from sourceView: UIView, playButton: UIButton? = nil) {
@@ -596,9 +690,10 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   private func beginRoomSelection(from sourceView: UIView) {
     Task {
       do {
-        let groups = try await controller.refresh(
+        let discoveredGroups = try await controller.refresh(
           manualHost: UserDefaults.standard.string(forKey: DefaultsKey.manualHost)
         )
+        let groups = groupsOnConfiguredHomeNetwork(discoveredGroups)
         guard !groups.isEmpty else { throw BonobS2Error.noRooms }
         if groups.count == 1, let group = groups.first {
           try await use(group: group)
@@ -645,7 +740,8 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
       UserDefaults.standard.set(host, forKey: DefaultsKey.manualHost)
       Task {
         do {
-          let groups = try await self.controller.refresh(manualHost: host)
+          let discoveredGroups = try await self.controller.refresh(manualHost: host)
+          let groups = self.groupsOnConfiguredHomeNetwork(discoveredGroups)
           guard !groups.isEmpty else { throw BonobS2Error.noRooms }
           if groups.count == 1, let group = groups.first { try await self.use(group: group) }
           else { self.presentRoomPicker(groups: groups, sourceView: sourceView) }
@@ -659,6 +755,10 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   }
 
   func stopControllingSonos(restoreWhenLocalNetworkReturns: Bool = false) {
+    networkLossTask?.cancel()
+    networkLossTask = nil
+    homeNetworkValidationTask?.cancel()
+    homeNetworkValidationTask = nil
     sonosStateSyncTask?.cancel()
     sonosStateSyncTask = nil
     sonosProgressUpdateTask?.cancel()
@@ -700,6 +800,7 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
     )
     if let controlButton { refreshSonosButton(controlButton) }
     if let miniPlayerTargetButton { refreshSonosButton(miniPlayerTargetButton) }
+    if let playerControlTargetButton { refreshPlayerControlSonosButton(playerControlTargetButton) }
     if let primaryPlayButton {
       playerHandlerRefreshPlayButton(primaryPlayButton)
     }
@@ -838,17 +939,53 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
   }
 
   func refreshSonosButton(_ button: UIButton) {
-    button.tintColor = isSonosPlaying ? .systemBlue : .label
+    let isEnabled = isSonosPlaying || isSonosAvailable
+    button.isEnabled = isEnabled
+    button.alpha = isEnabled ? 1 : 0.35
+    button.tintColor = isSonosPlaying ? .systemBlue : (isEnabled ? .label : .tertiaryLabel)
     button.isSelected = isSonosPlaying
+    let image = UIImage(
+      systemName: isSonosPlaying ? "hifispeaker.2.fill" : "hifispeaker.2"
+    )?.withConfiguration(UIImage.SymbolConfiguration(scale: .medium))
     if button.configuration != nil {
-      button.configuration?.image = UIImage(
-        systemName: isSonosPlaying ? "hifispeaker.2.fill" : "hifispeaker.2"
-      )?.withConfiguration(UIImage.SymbolConfiguration(scale: .medium))
-      button.configuration?.baseForegroundColor = isSonosPlaying ? .systemBlue : .label
+      button.configuration?.image = image
+      button.configuration?.baseForegroundColor = isSonosPlaying
+        ? .systemBlue
+        : (isEnabled ? .label : .tertiaryLabel)
+    } else {
+      button.setImage(image, for: .normal)
     }
     button.accessibilityLabel = isSonosPlaying
       ? "Playback target: Sonos \(activeGroup?.name ?? "")"
-      : "Choose Sonos playback target"
+      : (isSonosAvailable
+        ? "Choose Sonos playback target"
+        : "Sonos is unavailable on this network")
+  }
+
+  /// The complete player's target button sits in the same options row as
+  /// AirPlay, so it deliberately keeps AirPlay's plain outline-button style.
+  func refreshPlayerControlSonosButton(_ button: UIButton) {
+    let isEnabled = isSonosPlaying || isSonosAvailable
+    button.isEnabled = isEnabled
+    button.alpha = isEnabled ? 1 : 0.35
+    button.tintColor = isSonosPlaying ? .systemBlue : (isEnabled ? .label : .tertiaryLabel)
+    button.setImage(
+      UIImage(systemName: "hifispeaker.2")?
+        .withConfiguration(UIImage.SymbolConfiguration(scale: .medium)),
+      for: .normal
+    )
+    button.accessibilityLabel = isSonosPlaying
+      ? "Switch playback to this device"
+      : (isSonosAvailable
+        ? "Switch playback to Sonos"
+        : "Sonos is unavailable on this network")
+  }
+
+  private func setSonosAvailability(_ isAvailable: Bool) {
+    isSonosAvailable = isAvailable
+    if let controlButton { refreshSonosButton(controlButton) }
+    if let miniPlayerTargetButton { refreshSonosButton(miniPlayerTargetButton) }
+    if let playerControlTargetButton { refreshPlayerControlSonosButton(playerControlTargetButton) }
   }
 
   private func beginSonosStateSynchronization() {
@@ -903,14 +1040,22 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
     let refreshGeneration = trackChangeGeneration
     do {
       let transport = try await controller.transportInfo(in: group)
-      let position = try await controller.positionInfo(in: group)
+      let position: SonosPositionInfo?
+      do {
+        position = try await controller.positionInfo(in: group)
+      } catch {
+        // An idle room can have no current AVTransport item. That must not
+        // force Amperfy out of Sonos mode just because there is no song yet.
+        if transport.isPlaying { throw error }
+        position = nil
+      }
       // Ignore a snapshot started before a Next/Previous command. Without this,
       // a late response can briefly move the UI back to the previous track.
       guard refreshGeneration == trackChangeGeneration,
             isSonosPlaying, !isPlayPauseCommandInFlight, !isTrackChangeInFlight,
             activeGroup?.id == group.id else { return }
       if let expectedSonosTrackID {
-        guard BonobS2Template.trackID(in: position.trackURI) == expectedSonosTrackID else {
+        guard BonobS2Template.trackID(in: position?.trackURI ?? "") == expectedSonosTrackID else {
           // Sonos can acknowledge Next before GetPositionInfo advances. Keep
           // the optimistic UI instead of briefly restoring the previous song.
           return
@@ -922,8 +1067,10 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
          let confirmedPausedState = transport.isPaused {
         isSonosPaused = confirmedPausedState
       }
-      synchronizeCurrentSong(with: position)
-      updateSonosPosition(position)
+      if let position {
+        synchronizeCurrentSong(with: position)
+        updateSonosPosition(position)
+      }
       updateSystemPlaybackState()
       let volumeGeneration = sonosVolumeChangeGeneration
       if let confirmedVolume = try? await controller.groupVolume(in: group),
@@ -946,6 +1093,7 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
 
   private func leaveUnavailableSonosMode(reason: String) {
     guard isSonosPlaying else { return }
+    setSonosAvailability(false)
     if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
       appDelegate.eventLogger.info(
         topic: "Sonos",
@@ -1137,19 +1285,27 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
     }
   }
 
-  /// iOS does not guarantee execution after the user terminates the process,
-  /// but issuing Pause here covers termination paths where a final grace period
-  /// is provided. The Sonos state is updated optimistically before the request.
+  /// iOS does not guarantee this callback when a suspended app is terminated,
+  /// but when a final grace period is provided, wait briefly for Sonos to
+  /// receive Pause instead of leaving an unstructured task behind at exit.
   func pauseForApplicationTermination() {
     guard isSonosPlaying, !isSonosPaused, let group = activeGroup else { return }
     isSonosPaused = true
     updateSystemPlaybackState()
-    Task { try? await controller.pause(in: group) }
+
+    let completion = DispatchSemaphore(value: 0)
+    Task.detached(priority: .userInitiated) { [controller] in
+      defer { completion.signal() }
+      try? await controller.pause(in: group)
+    }
+    _ = completion.wait(timeout: .now() + 1.5)
   }
 
   private func use(group: SonosGroup) async throws {
     UserDefaults.standard.set(group.id, forKey: DefaultsKey.defaultGroupID)
     UserDefaults.standard.set(group.name, forKey: DefaultsKey.defaultGroupName)
+    rememberHomeNetwork(from: group)
+    setSonosAvailability(true)
     guard let template = loadTemplate() else {
       let position = try await controller.positionInfo(in: group)
       let learned = try BonobS2Template(positionInfo: position)
@@ -1245,6 +1401,42 @@ final class BonobS2Integration: PlaybackCommandInterceptor, MusicPlayable {
 
   private func saveTemplate(_ template: BonobS2Template) throws {
     UserDefaults.standard.set(try JSONEncoder().encode(template), forKey: DefaultsKey.template)
+  }
+
+  /// A Sonos player's RINCON id is stable across group and Wi-Fi changes. It
+  /// provides a stronger home-network fingerprint than an SSID and requires no
+  /// location permission or Wi-Fi-information entitlement.
+  private func rememberHomeNetwork(from group: SonosGroup) {
+    guard UserDefaults.standard.string(forKey: DefaultsKey.homePlayerID) == nil else { return }
+    let playerID = group.memberIDs.sorted().first ?? group.coordinatorID
+    UserDefaults.standard.set(playerID, forKey: DefaultsKey.homePlayerID)
+  }
+
+  private func groupContainingHomePlayer(in groups: [SonosGroup]) -> SonosGroup? {
+    guard let playerID = UserDefaults.standard.string(forKey: DefaultsKey.homePlayerID) else {
+      return nil
+    }
+    return groups.first(where: {
+      $0.coordinatorID == playerID || $0.memberIDs.contains(playerID)
+    })
+  }
+
+  private func groupsOnConfiguredHomeNetwork(_ groups: [SonosGroup]) -> [SonosGroup] {
+    if UserDefaults.standard.string(forKey: DefaultsKey.homePlayerID) != nil {
+      return groupContainingHomePlayer(in: groups) == nil ? [] : groups
+    }
+
+    // Migrate an existing installation the first time its previously selected
+    // room is found. Before any room has been configured, deliberate setup is
+    // allowed on the current network.
+    let defaultID = UserDefaults.standard.string(forKey: DefaultsKey.defaultGroupID)
+    let defaultName = UserDefaults.standard.string(forKey: DefaultsKey.defaultGroupName)
+    guard defaultID != nil || defaultName != nil else { return groups }
+    guard let knownGroup = groups.first(where: {
+      $0.id == defaultID || $0.name == defaultName
+    }) else { return [] }
+    rememberHomeNetwork(from: knownGroup)
+    return groups
   }
 
   private func presentError(_ error: Error) {

@@ -322,8 +322,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var monitor = networkMonitor
     monitor.connectionTypeChangedCB = { [weak self] _ in
       await MainActor.run {
-        guard let self, self.networkMonitor.isWifiOrEthernet else { return }
-        self.bonobS2Integration.localNetworkDidBecomeAvailable()
+        guard let self else { return }
+        if self.networkMonitor.isWifiOrEthernet {
+          self.bonobS2Integration.localNetworkDidBecomeAvailable()
+        } else {
+          self.bonobS2Integration.localNetworkDidBecomeUnavailable()
+        }
       }
     }
   }

@@ -123,6 +123,8 @@ final public class NetworkMonitor: NetworkMonitorFacade {
   }
 
   public var isWifiOrEthernet: Bool {
-    isConnectedToNetwork && !isCellular
+    let path = networkPath.wrappedValue
+    return path.status == .satisfied &&
+      (path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet))
   }
 }

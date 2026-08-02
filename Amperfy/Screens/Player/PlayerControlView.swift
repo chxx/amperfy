@@ -79,6 +79,20 @@ class PlayerControlView: UIView {
   @IBOutlet
   weak var optionsButton: UIButton!
 
+  private lazy var sonosModeButton: UIButton = {
+    let button = UIButton(type: .system)
+    button.adjustsImageSizeForAccessibilityContentSizeCategory = true
+    button.tintColor = .label
+    button.setImage(
+      UIImage(systemName: "hifispeaker.2")?.withConfiguration(
+        UIImage.SymbolConfiguration(scale: .medium)
+      ),
+      for: .normal
+    )
+    button.addTarget(self, action: #selector(sonosModeButtonPushed), for: .touchUpInside)
+    return button
+  }()
+
   required init?(coder aDecoder: NSCoder) {
     #if targetEnvironment(macCatalyst) // ok
       self.airplayVolume = MPVolumeView(frame: .zero)
@@ -100,6 +114,8 @@ class PlayerControlView: UIView {
 
     playerHandler = PlayerUIHandler(player: player, style: .popupPlayer)
     appDelegate.bonobS2Integration.registerPlayerControlPlayButton(playButton)
+    appDelegate.bonobS2Integration.registerPlayerControlTargetButton(sonosModeButton)
+    installSonosModeButtonIfNeeded()
 
     playButton.imageView?.tintColor = .label
     previousButton.tintColor = .label
@@ -129,6 +145,26 @@ class PlayerControlView: UIView {
         )
       }
     )
+  }
+
+  private func installSonosModeButtonIfNeeded() {
+    guard sonosModeButton.superview == nil,
+          let airPlayIndex = optionsStackView.arrangedSubviews.firstIndex(of: airplayButton)
+    else { return }
+
+    sonosModeButton.translatesAutoresizingMaskIntoConstraints = false
+    optionsStackView.insertArrangedSubview(sonosModeButton, at: airPlayIndex)
+    NSLayoutConstraint.activate([
+      sonosModeButton.widthAnchor.constraint(equalToConstant: 28),
+      sonosModeButton.heightAnchor.constraint(equalTo: sonosModeButton.widthAnchor),
+    ])
+  }
+
+  @objc
+  private func sonosModeButtonPushed() {
+    appDelegate.bonobS2Integration.togglePlaybackTarget { [weak self] in
+      self?.refreshPlayer()
+    }
   }
 
   @IBAction
@@ -266,7 +302,22 @@ class PlayerControlView: UIView {
     )
     playerHandler?.refreshPrevNextButtons(previousButton: previousButton, nextButton: nextButton)
     playerHandler?.refreshDisplayPlaylistButton(displayPlaylistButton: displayPlaylistButton)
+    refreshAirPlayButtonAvailability()
+    refreshSonosModeButton()
     refreshPlayerModeChangeButton()
+  }
+
+  private func refreshAirPlayButtonAvailability() {
+    let isAvailable = !appDelegate.bonobS2Integration.isSonosMode
+    airplayButton.isEnabled = isAvailable
+    airplayButton.alpha = isAvailable ? 1.0 : 0.35
+    airplayButton.accessibilityLabel = isAvailable
+      ? "Choose audio output"
+      : "AirPlay is unavailable during Sonos playback"
+  }
+
+  private func refreshSonosModeButton() {
+    appDelegate.bonobS2Integration.refreshPlayerControlSonosButton(sonosModeButton)
   }
 
   func createPlaybackRateMenu() -> UIMenuElement {

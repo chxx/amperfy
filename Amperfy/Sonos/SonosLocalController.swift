@@ -546,6 +546,17 @@ actor SonosLocalController {
     return device
   }
 
+  /// Quickly validates the previously discovered household player without
+  /// waiting for a full Bonjour/SSDP discovery cycle.
+  func isKnownPlayerReachable(id: String, timeout: TimeInterval = 1) async -> Bool {
+    guard let location = devices[id]?.location else { return false }
+    do {
+      return try await loadDevice(at: location, timeout: timeout).id == id
+    } catch {
+      return false
+    }
+  }
+
   func positionInfo(in group: SonosGroup) async throws -> SonosPositionInfo {
     let device = try coordinator(for: group)
     let values = try await avTransportCall(device, action: "GetPositionInfo")
@@ -699,8 +710,13 @@ actor SonosLocalController {
     }
   }
 
-  private func loadDevice(at location: URL) async throws -> SonosDevice {
-    let (data, response) = try await URLSession.shared.data(from: location)
+  private func loadDevice(
+    at location: URL,
+    timeout: TimeInterval = 8
+  ) async throws -> SonosDevice {
+    var request = URLRequest(url: location)
+    request.timeoutInterval = timeout
+    let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
       throw SonosLocalError.invalidDeviceDescription
     }
